@@ -12,9 +12,7 @@ PI-CAI_reader
 │    │   pre_processing.py  # File containing the functions for the dataset creation
 │    │   dataloader.py # Custom torch dataset class
 │   
-│   
-└─── notebook
-     │   PI-CAI_reader.ipynb # Colab/Jupyter notebook testbench
+│    PI-CAI_reader.ipynb # Colab/Jupyter notebook testbench
 ```
 
 

@@ -21,5 +21,5 @@ setuptools.setup(
     },
     license='GPL-3.0',
     packages=['pi_cai_reader_core'],
-    install_requires=['numpy', 'torch', 'cv2', 'medpy.io', 'matplotlib.pyplot', 'os'],
+    install_requires=['numpy', 'torch'],
 )

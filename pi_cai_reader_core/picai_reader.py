@@ -4,13 +4,16 @@ import numpy as np
 import matplotlib.pyplot as plt
 import nibabel as nib
 import cv2
+from tqdm import tqdm
 
 
 
 class PicaiReader():
 
-	def __init__(self):
-		pass
+	def __init__(self, paths):
+		self.g_nii_root = paths['g_nii_root']
+		self.l_nii_root = paths['l_nii_root']
+		self.mha_root = paths['mha_root']
 
 
 	# Build_dict_for_masks:
@@ -24,13 +27,16 @@ class PicaiReader():
 
 	def build_dict_for_masks(self, path):
 		print("Building dictionary for masks...")
-		self.niis_dict = {}
+		niis_dict = {}
 		niis_names = os.listdir(path)
 
 		for nii in niis_names:
 			tokens = nii.split('_')
 			p_id = tokens[0]
-			self.niis_dict[p_id] = nii
+			niis_dict[p_id] = nii
+
+
+		return niis_dict
 
 
 	# Fetch_patient_t2w:
@@ -62,15 +68,17 @@ class PicaiReader():
 	# -> path: path to the root folder of the patient
 	# <- d: absolute path to the nii object
 
-	def fetch_patient_nii(self, path, p_id):
+	def fetch_patient_nii(self, p_id, type):
+		path = self.g_nii_root if type == 'gland' else self.l_nii_root
+		dict = self.g_niis_dict if type == 'gland' else self.l_niis_dict
 		niis = os.listdir(path)
 		nii = ""
 		found = True
 
 		try:
-			nii = self.niis_dict[p_id]
+			nii = dict[p_id]
 		except:
-			print("Cannot find mask series for patient: ", p_id)
+			print("Cannot find ",  type, " mask series for patient: ", p_id)
 			found = False
 
 		return nii, found
@@ -86,7 +94,7 @@ class PicaiReader():
 	# <- imgs: list containing paths to the T2W MRI series
 	#    and the corresponding niftis
 
-	def build_mri_list(self, paths):
+	def build_mri_list(self):
 		patients = os.listdir(paths['mha_root'])
 
 		self.mris = []
@@ -94,19 +102,21 @@ class PicaiReader():
 		print("Fetching MRI series and niftis for all patients...")
 		w = 0
 		for patient in patients:
-			if w > 15:
+			if w > 30:
 				break
 			w += 1
 			if patient.startswith("."):
 				continue
-			path_to_patient = paths['mha_root'] + '/' + patient + '/'
+			path_to_patient = self.mha_root + '/' + patient + '/'
 			t2w_img = self.fetch_patient_t2w(path_to_patient)
-			nii, found = self.fetch_patient_nii(paths['nii_root'], patient)
-			if not found:
+			g_nii, g_found = self.fetch_patient_nii(patient, 'gland')
+			l_nii, l_found = self.fetch_patient_nii(patient, 'lesion')
+			if not g_found or not l_found:
 				continue
 			p = {
 			    'img_series': t2w_img,
-			    'mask_series': paths['nii_root'] + nii
+			    'g_mask_series': self.g_nii_root + g_nii,
+				'l_mask_series': self.l_nii_root + l_nii
 			}
 			self.mris.append(p)
 		print(len(self.mris), " patients were successfully fetched.")
@@ -131,10 +141,13 @@ class PicaiReader():
 
 	def load_obj(self, obj):
 		mri, img_head = load(obj['mha_path'])
-		nii = nib.load(obj['nii_path'])
-		nii = nii.get_fdata()
+		g_nii = nib.load(obj['g_nii_path'])
+		g_nii = g_nii.get_fdata()
 
-		return mri, nii
+		l_nii = nib.load(obj['l_nii_path'])
+		l_nii = l_nii.get_fdata()
+
+		return mri, g_nii, l_nii
 
 
 	def resize_obj(self, obj):
@@ -144,29 +157,32 @@ class PicaiReader():
 		return obj
 
 
-	def is_obj_valid(self, mri, nii):
-		if mri.shape[2] != nii.shape[2]:
+	def is_obj_valid(self, mri, g_nii, l_nii):
+		if mri.shape[2] != g_nii.shape[2] and mri.shape[2] != l_nii.shape[2]:
 			return False
 		return True
 
 
 	def list_to_numpy(self, l):
+		print("Counting slices...")
 		slice_count = self.count_slices(l)
-		n_a = np.zeros((slice_count, 256, 256, 2))
+		print("Slice count: ", slice_count)
+		n_a = np.zeros((slice_count, 256, 256, 3))
 		w = 0
-		for i in range(len(l)):
-			mri, nii = self.load_obj(l[i])
-			if not self.is_obj_valid(mri, nii):
+		for i in tqdm(range(len(l))):
+			mri, g_nii, l_nii = self.load_obj(l[i])
+			if not self.is_obj_valid(mri, g_nii, l_nii):
 				continue
 			for j in range(mri.shape[2]):
-				print(mri[:, :, j])
 				slice = self.resize_obj(mri[:, :, j])
-				print(slice)
 				n_a[w, :, :, 0] = slice
-				slice = self.resize_obj(nii[:, :, j])
+				slice = self.resize_obj(g_nii[:, :, j])
 				n_a[w, :, :, 1] = slice
+				slice = self.resize_obj(l_nii[:, :, j])
+				n_a[w, :, :, 2] = slice
 				w += 1
 		n_a = n_a[:w, :, :, :]
+		print("End list_to_numpy...")
 		return n_a
 
 
@@ -197,7 +213,8 @@ class PicaiReader():
 
 				p = {
 					'mha_path': obj['img_series'],
-					'nii_path': obj['mask_series'],
+					'g_nii_path': obj['g_mask_series'],
+					'l_nii_path': obj['l_mask_series'],
 					'slice': i
 				}
 				imgs.append(p)
@@ -214,25 +231,61 @@ class PicaiReader():
 
 	def create_dataset(self, paths):
 
-		self.build_dict_for_masks(paths['nii_root'])
-		self.build_mri_list(paths)
+		self.g_niis_dict = self.build_dict_for_masks(self.g_nii_root)
+		self.l_niis_dict = self.build_dict_for_masks(self.l_nii_root)
+		self.build_mri_list()
 		self.split_mris()
 		self.create_sets_lists()
+		print("1")
+		self.train_set = self.list_to_numpy(self.train_set_l)
+		print("2")
+		self.valid_set = self.list_to_numpy(self.valid_set_l)
+		print("3")
 		self.test_set = self.list_to_numpy(self.test_set_l)
 
 
+	def save_sets(self):
+		root = '/home/itzo/datasets/picai/proper/'
+		np.save(root + "train", self.train_set)
+		np.save(root + "valid", self.valid_set)
+		np.save(root + "test", self.test_set)
+
+
+d_root = '/home/itzo/datasets/picai/picai_labels/'
 paths = {
-	'nii_root': '/home/itzo/datasets/picai/picai_labels/csPCa_lesion_delineations/human_expert/resampled/',
+	'g_nii_root': d_root + 'anatomical_delineations/whole_gland/AI/Bosma22b/',
+	'l_nii_root': d_root + 'csPCa_lesion_delineations/human_expert/resampled/',
 	'mha_root': '/home/itzo/datasets/picai/fold0'
 }
 
-d = PicaiReader()
+d = PicaiReader(paths)
 d.create_dataset(paths)
+d.save_sets()
 
-plt.figure()
-plt.imshow(d.test_set[0, :, :, 0], cmap='gray')
-plt.savefig('fig.png')
+# for i in range(len(d.test_set)):
+# 	plt.figure()
+# 	plt.imshow(d.test_set[i, :, :, 0], cmap='gray')
+# 	plt.savefig('images/fig_'+str(i)+'.png')
+# 	plt.close()
+#
+# 	plt.figure()
+# 	plt.imshow(d.test_set[i, :, :, 1], cmap='gray')
+# 	plt.savefig('images/fig_g_mask'+str(i)+'.png')
+# 	plt.close()
+#
+# 	plt.figure()
+# 	plt.imshow(d.test_set[i, :, :, 2], cmap='gray')
+# 	plt.savefig('images/fig_l_mask'+str(i)+'.png')
+# 	plt.close()
+#
+# 	plt.figure()
+# 	plt.imshow(d.test_set[i, :, :, 0], cmap='gray')
+# 	plt.imshow(d.test_set[i, :, :, 1], alpha=0.2)
+# 	plt.savefig('images/fig_gland'+str(i)+'.png')
+# 	plt.close()
 
-plt.figure()
-plt.imshow(d.test_set[0, :, :, 1], cmap='gray')
-plt.savefig('fig_mask.png')
+	# plt.figure()
+	# plt.imshow(d.test_set[i, :, :, 0], cmap='gray')
+	# plt.imshow(d.test_set[i, :, :, 2], alpha=0.2)
+	# plt.savefig('images/fig_lesion'+str(i)+'.png')
+	# plt.close()
